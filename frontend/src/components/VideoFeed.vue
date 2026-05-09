@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch, inject, nextTick, onMounted, type Ref } from 'vue'
 import { Swiper, SwiperSlide } from 'swiper/vue'
 import { Mousewheel, Virtual } from 'swiper/modules'
 import type { Swiper as SwiperInstance } from 'swiper'
@@ -9,22 +9,37 @@ import { fetchVideos, fetchFavoriteIds, toggleFavorite, type Video } from '../ap
 
 const modules = [Mousewheel, Virtual]
 
-const videos = ref<Video[]>([])
-const currentIndex = ref(0)
-const loading = ref(true)
-const error = ref('')
-const favoriteIds = ref<Set<number>>(new Set())
+const videos        = ref<Video[]>([])
+const currentIndex  = ref(0)
+const loading       = ref(true)
+const error         = ref('')
+const favoriteIds   = ref<Set<number>>(new Set())
+const swiperRef     = ref<SwiperInstance | null>(null)
 
-/**
- * Status logic:
- *   active  – playing
- *   preload – src loaded, silently buffering (next video)
- *   idle    – no src, no memory usage
- *
- * Only 3 DOM nodes exist at a time (Swiper Virtual).
- */
+// ── fix 8: re-navigate after fullscreen layout reflow ─────────────────────
+const isFullscreenRef = inject<Ref<boolean>>('isFullscreen', ref(false))
+watch(isFullscreenRef, () => {
+  nextTick(() => swiperRef.value?.slideTo(currentIndex.value, 0, false))
+})
+
+// ── fix 3: jump to a specific video requested by FavoritesView ───────────
+const requestVideoId = inject<Ref<number | null>>('requestVideoId', ref(null))
+watch(requestVideoId, (id) => {
+  if (id === null) return
+  const idx = videos.value.findIndex(v => v.id === id)
+  if (idx !== -1) {
+    swiperRef.value?.slideTo(idx, 0, false)
+    currentIndex.value = idx
+  }
+  requestVideoId.value = null
+})
+
+// ── fix 2: HLS cache status ───────────────────────────────────────────────
+const cachedCount    = computed(() => videos.value.filter(v => v.hlsReady).length)
+const nextVideoReady = computed(() => videos.value[currentIndex.value + 1]?.hlsReady ?? false)
+
 function getStatus(index: number): PlayStatus {
-  if (index === currentIndex.value) return 'active'
+  if (index === currentIndex.value)     return 'active'
   if (index === currentIndex.value + 1) return 'preload'
   return 'idle'
 }
@@ -41,9 +56,9 @@ function shuffle<T>(arr: T[]): T[] {
 async function loadVideos() {
   try {
     loading.value = true
-    error.value = ''
+    error.value   = ''
     const [vids, ids] = await Promise.all([fetchVideos(), fetchFavoriteIds()])
-    videos.value = shuffle(vids)
+    videos.value      = shuffle(vids)
     favoriteIds.value = new Set(ids)
   } catch {
     error.value = '加载失败，请检查后端服务是否运行'
@@ -54,18 +69,13 @@ async function loadVideos() {
 
 async function onToggleFavorite(videoId: number) {
   const nowFavorited = await toggleFavorite(videoId)
-  if (nowFavorited) {
-    favoriteIds.value.add(videoId)
-  } else {
-    favoriteIds.value.delete(videoId)
-  }
-  // Trigger reactivity for Set
+  if (nowFavorited) favoriteIds.value.add(videoId)
+  else              favoriteIds.value.delete(videoId)
   favoriteIds.value = new Set(favoriteIds.value)
 }
 
-function onSlideChange(swiper: SwiperInstance) {
-  currentIndex.value = swiper.activeIndex
-}
+function onSwiper(sw: SwiperInstance)       { swiperRef.value = sw }
+function onSlideChange(sw: SwiperInstance)  { currentIndex.value = sw.activeIndex }
 
 onMounted(loadVideos)
 </script>
@@ -104,7 +114,7 @@ onMounted(loadVideos)
       <p class="text-white/25 text-xs text-center">在「设置」页配置视频目录后点「保存并扫描」</p>
     </div>
 
-    <!-- Feed — Virtual mode: only 3 slides in DOM at once -->
+    <!-- Feed -->
     <Swiper
       v-else
       :modules="modules"
@@ -117,6 +127,7 @@ onMounted(loadVideos)
       :resistance-ratio="0.7"
       :virtual="{ enabled: true, addSlidesAfter: 1, addSlidesBefore: 1 }"
       class="w-full h-full"
+      @swiper="onSwiper"
       @slide-change="onSlideChange"
     >
       <SwiperSlide
@@ -128,6 +139,8 @@ onMounted(loadVideos)
           :video="video"
           :status="getStatus(index)"
           :is-favorited="favoriteIds.has(video.id)"
+          :next-video-ready="index === currentIndex ? nextVideoReady : false"
+          :cached-count="index === currentIndex ? cachedCount : 0"
           @toggle-favorite="onToggleFavorite"
         />
       </SwiperSlide>
@@ -140,5 +153,6 @@ onMounted(loadVideos)
         {{ currentIndex + 1 }} / {{ videos.length }}
       </span>
     </div>
+
   </div>
 </template>

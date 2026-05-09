@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, inject, onMounted } from 'vue'
 import { fetchFavoriteVideos, toggleFavorite, type Video, formatDuration } from '../api/videos'
 
 const videos = ref<Video[]>([])
 const loading = ref(true)
+
+// fix 3: jump to video in feed when tapped
+const requestPlayVideo = inject<(id: number) => void>('requestPlayVideo', () => {})
 
 async function load() {
   loading.value = true
@@ -57,7 +60,8 @@ onMounted(load)
         <div
           v-for="video in videos"
           :key="video.id"
-          class="flex items-center gap-3 bg-white/5 rounded-xl p-2.5 group"
+          class="flex items-center gap-3 bg-white/5 rounded-xl p-2.5 group cursor-pointer active:bg-white/10"
+          @click="requestPlayVideo(video.id)"
         >
           <!-- Thumbnail -->
           <div class="w-24 h-14 rounded-lg overflow-hidden bg-white/10 flex-shrink-0 relative">
@@ -91,7 +95,7 @@ onMounted(load)
           <button
             class="flex-shrink-0 p-2 text-red-400/60 hover:text-red-400
                    opacity-0 group-hover:opacity-100 transition-all"
-            @click="removeFavorite(video)"
+            @click.stop="removeFavorite(video)"
           >
             <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0

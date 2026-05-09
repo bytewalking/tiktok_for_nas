@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, provide } from 'vue'
+import { ref, watch, provide, computed } from 'vue'
 import VideoFeed from './components/VideoFeed.vue'
 import FavoritesView from './components/FavoritesView.vue'
 import ScanSettings from './components/ScanSettings.vue'
@@ -13,7 +13,19 @@ const isFullscreen = ref(false)
 provide('isFullscreen', isFullscreen)
 provide('setFullscreen', (v: boolean) => { isFullscreen.value = v })
 
-// Reload favorites list whenever the tab becomes active
+// Fix 5: pause video when leaving feed tab
+const isAppPaused = computed(() => activeTab.value !== 'feed')
+provide('isAppPaused', isAppPaused)
+
+// Fix 3: allow FavoritesView to jump to a video in the feed
+const requestVideoId = ref<number | null>(null)
+provide('requestVideoId', requestVideoId)
+provide('requestPlayVideo', (id: number) => {
+  requestVideoId.value = id
+  activeTab.value = 'feed'
+})
+
+// Reload favorites/profile list whenever the tab becomes active
 const favoritesRef = ref<InstanceType<typeof FavoritesView> | null>(null)
 const profileRef   = ref<InstanceType<typeof ProfileView>   | null>(null)
 watch(activeTab, tab => {

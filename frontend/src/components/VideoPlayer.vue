@@ -9,30 +9,32 @@ const props = defineProps<{
   video: Video
   status: PlayStatus
   isFavorited?: boolean
+  nextVideoReady?: boolean   // fix 2
+  cachedCount?: number       // fix 2
 }>()
 
-const emit = defineEmits<{
-  'toggle-favorite': [videoId: number]
-}>()
+const emit = defineEmits<{ 'toggle-favorite': [videoId: number] }>()
 
-// ── fullscreen (provided by App.vue) ──────────────────────────────────────
+// ── fix 5: pause/resume on tab switch ─────────────────────────────────────
+const isAppPaused = inject<Ref<boolean>>('isAppPaused', ref(false))
+
+// ── fix 8: fullscreen ─────────────────────────────────────────────────────
 const isFullscreenRef = inject<Ref<boolean>>('isFullscreen', ref(false))
-const setFullscreen = inject<(v: boolean) => void>('setFullscreen', () => {})
-const isFullscreen = computed(() => isFullscreenRef.value)
-
-function toggleFullscreen() {
-  setFullscreen(!isFullscreen.value)
-}
+const setFullscreen   = inject<(v: boolean) => void>('setFullscreen', () => {})
+const isFullscreen    = computed(() => isFullscreenRef.value)
+function toggleFullscreen() { setFullscreen(!isFullscreen.value) }
 
 // ── state ─────────────────────────────────────────────────────────────────
-const videoRef = ref<HTMLVideoElement | null>(null)
-const isPlaying = ref(false)
-const isBuffering = ref(false)
-const currentTime = ref(0)
-const duration = ref(props.video.duration ?? 0)
-const isMuted = ref(false)
-const showPauseIcon = ref(false)
-const seekIndicator = ref('')
+const videoRef        = ref<HTMLVideoElement | null>(null)
+const isPlaying       = ref(false)
+const isBuffering     = ref(false)
+const currentTime     = ref(0)
+const duration        = ref(props.video.duration ?? 0)
+const isMuted         = ref(false)
+const showPauseIcon   = ref(false)
+const seekIndicator   = ref('')
+const bufferedPercent = ref(0)   // fix 1
+const needsTap        = ref(false) // fix 4: show "tap to play" instead of muted fallback
 
 let hls: Hls | null = null
 let progressTimer: ReturnType<typeof setInterval> | null = null
@@ -50,21 +52,19 @@ function onTouchStart(e: TouchEvent) {
   touchStartY = e.touches[0].clientY
   swipeDetected = false
 }
-
 function onTouchEnd(e: TouchEvent) {
-  const deltaX = e.changedTouches[0].clientX - touchStartX
-  const deltaY = e.changedTouches[0].clientY - touchStartY
-  if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY)) {
+  const dx = e.changedTouches[0].clientX - touchStartX
+  const dy = e.changedTouches[0].clientY - touchStartY
+  if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
     swipeDetected = true
     const v = videoRef.value
     if (v && duration.value) {
-      const secs = deltaX > 0 ? 10 : -10
+      const secs = dx > 0 ? 10 : -10
       v.currentTime = Math.max(0, Math.min(duration.value, v.currentTime + secs))
       flashSeekIndicator(secs)
     }
   }
 }
-
 function flashSeekIndicator(secs: number) {
   seekIndicator.value = secs > 0 ? `+${secs}s` : `${secs}s`
   if (seekIndicatorTimer) clearTimeout(seekIndicatorTimer)
@@ -76,20 +76,18 @@ const progressPercent = computed(() =>
   duration.value ? (currentTime.value / duration.value) * 100 : 0
 )
 
-// ── source management ──────────────────────────────────────────────────────
-
+// ── source management ─────────────────────────────────────────────────────
 function loadSource() {
   if (srcLoaded) return
   srcLoaded = true
   const video = videoRef.value
   if (!video) return
-  const src = getVideoStreamUrl(props.video.id)
   if (props.video.hlsReady && Hls.isSupported()) {
     hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30, maxMaxBufferLength: 60 })
     hls.loadSource(`/hls/${props.video.id}/index.m3u8`)
     hls.attachMedia(video)
   } else {
-    video.src = src
+    video.src = getVideoStreamUrl(props.video.id)
     video.preload = 'auto'
   }
 }
@@ -104,21 +102,23 @@ function unloadSource() {
   srcLoaded = false
   isPlaying.value = false
   isBuffering.value = false
+  bufferedPercent.value = 0
 }
 
 // ── status handler ────────────────────────────────────────────────────────
-
 function applyStatus(status: PlayStatus) {
   const video = videoRef.value
   if (!video) return
   if (status === 'active') {
     isBuffering.value = true
+    needsTap.value    = false
     loadSource()
+    // fix 4: try unmuted; on fail show tap-to-play (no silent fallback)
+    video.muted = false
+    isMuted.value = false
     video.play().catch(() => {
-      // Autoplay blocked — retry muted so the switch always plays
-      video.muted = true
-      isMuted.value = true
-      video.play().catch(() => { isBuffering.value = false })
+      needsTap.value    = true
+      isBuffering.value = false
     })
     startProgressTracking()
   } else if (status === 'preload') {
@@ -128,27 +128,46 @@ function applyStatus(status: PlayStatus) {
   } else {
     stopProgressTracking()
     unloadSource()
+    needsTap.value = false
   }
 }
 
 onMounted(() => applyStatus(props.status))
 watch(() => props.status, applyStatus)
 
+// fix 5: pause / resume when switching away from feed tab
+watch(isAppPaused, (paused) => {
+  if (props.status !== 'active') return
+  const v = videoRef.value
+  if (!v) return
+  if (paused) {
+    v.pause()
+  } else if (!needsTap.value) {
+    v.play().catch(() => {})
+  }
+})
+
 onUnmounted(() => {
   unloadSource()
   stopProgressTracking()
-  if (pauseIconTimer) clearTimeout(pauseIconTimer)
+  if (pauseIconTimer)     clearTimeout(pauseIconTimer)
   if (seekIndicatorTimer) clearTimeout(seekIndicatorTimer)
 })
 
 // ── video events ──────────────────────────────────────────────────────────
+function onPlay()    { isPlaying.value = true; isBuffering.value = false }
 
-function onPlay() { isPlaying.value = true; isBuffering.value = false }
-function onPause() { isPlaying.value = false }
-function onWaiting() { if (props.status === 'active') isBuffering.value = true }
-function onCanPlay() {
+// fix 7: always save position on pause so watch-time stats update
+function onPause() {
+  isPlaying.value = false
+  const v = videoRef.value
+  if (v && props.status === 'active') saveProgress(props.video.id, v.currentTime).catch(() => {})
+}
+
+function onWaiting()  { if (props.status === 'active') isBuffering.value = true }
+function onCanPlay()  {
   isBuffering.value = false
-  if (props.status === 'active' && videoRef.value?.paused) {
+  if (props.status === 'active' && videoRef.value?.paused && !needsTap.value) {
     videoRef.value.play().catch(() => {})
   }
 }
@@ -162,11 +181,23 @@ function onLoadedMetadata() {
   const v = videoRef.value
   if (v?.duration && isFinite(v.duration)) duration.value = v.duration
 }
+// fix 1: buffered indicator
+function onProgress() {
+  const v = videoRef.value
+  if (!v || !duration.value) return
+  const buf = v.buffered
+  if (buf.length > 0) bufferedPercent.value = (buf.end(buf.length - 1) / duration.value) * 100
+}
 
 // ── controls ──────────────────────────────────────────────────────────────
-
 function handleClick() {
   if (swipeDetected) { swipeDetected = false; return }
+  // fix 4: first tap starts unmuted play
+  if (needsTap.value) {
+    needsTap.value = false
+    videoRef.value?.play().catch(() => {})
+    return
+  }
   togglePlay()
 }
 
@@ -193,23 +224,15 @@ function toggleMute() {
 function seekFromX(clientX: number, el: HTMLElement) {
   const v = videoRef.value
   if (!v || !duration.value) return
-  const rect = el.getBoundingClientRect()
+  const rect  = el.getBoundingClientRect()
   const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
   v.currentTime = ratio * duration.value
 }
-
-function onProgressClick(e: MouseEvent) {
-  seekFromX(e.clientX, e.currentTarget as HTMLElement)
-}
-function onProgressTouchStart(e: TouchEvent) {
-  seekFromX(e.touches[0].clientX, e.currentTarget as HTMLElement)
-}
-function onProgressTouchMove(e: TouchEvent) {
-  seekFromX(e.touches[0].clientX, e.currentTarget as HTMLElement)
-}
+function onProgressClick(e: MouseEvent)  { seekFromX(e.clientX, e.currentTarget as HTMLElement) }
+function onProgressTouchStart(e: TouchEvent) { seekFromX(e.touches[0].clientX, e.currentTarget as HTMLElement) }
+function onProgressTouchMove(e: TouchEvent)  { seekFromX(e.touches[0].clientX, e.currentTarget as HTMLElement) }
 
 // ── progress tracking ─────────────────────────────────────────────────────
-
 function startProgressTracking() {
   stopProgressTracking()
   progressTimer = setInterval(() => {
@@ -217,7 +240,6 @@ function startProgressTracking() {
     if (v && !v.paused) saveProgress(props.video.id, v.currentTime).catch(() => {})
   }, 5000)
 }
-
 function stopProgressTracking() {
   if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
 }
@@ -244,29 +266,37 @@ function stopProgressTracking() {
       @canplay="onCanPlay"
       @timeupdate="onTimeUpdate"
       @loadedmetadata="onLoadedMetadata"
+      @progress="onProgress"
     />
 
     <!-- Buffering spinner -->
     <Transition name="fade">
-      <div
-        v-if="isBuffering && status === 'active'"
-        class="absolute inset-0 flex items-center justify-center pointer-events-none"
-      >
-        <div
-          v-if="video.cover"
-          class="absolute inset-0 bg-cover bg-center"
-          :style="{ backgroundImage: `url(${video.cover})`, filter: 'blur(20px) brightness(0.4)' }"
-        />
-        <div class="relative z-10 w-10 h-10 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+      <div v-if="isBuffering && status === 'active'"
+           class="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div v-if="video.cover"
+             class="absolute inset-0 bg-cover bg-center"
+             :style="{ backgroundImage: `url(${video.cover})`, filter: 'blur(20px) brightness(0.4)' }"/>
+        <div class="relative z-10 w-10 h-10 border-2 border-white/30 border-t-white rounded-full animate-spin"/>
+      </div>
+    </Transition>
+
+    <!-- fix 4: tap to play overlay (unmuted, no silent fallback) -->
+    <Transition name="fade">
+      <div v-if="needsTap"
+           class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/40 z-20 pointer-events-none">
+        <div class="bg-black/60 rounded-full p-8 backdrop-blur-sm">
+          <svg class="w-16 h-16 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+        </div>
+        <p class="text-white/70 text-sm">点击播放</p>
       </div>
     </Transition>
 
     <!-- Pause icon flash -->
     <Transition name="scale-fade">
-      <div
-        v-if="showPauseIcon"
-        class="absolute inset-0 flex items-center justify-center pointer-events-none"
-      >
+      <div v-if="showPauseIcon"
+           class="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div class="bg-black/50 rounded-full p-5 backdrop-blur-sm">
           <svg class="w-10 h-10 text-white" fill="currentColor" viewBox="0 0 24 24">
             <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
@@ -277,10 +307,8 @@ function stopProgressTracking() {
 
     <!-- Seek indicator -->
     <Transition name="scale-fade">
-      <div
-        v-if="seekIndicator"
-        class="absolute inset-0 flex items-center justify-center pointer-events-none"
-      >
+      <div v-if="seekIndicator"
+           class="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div class="bg-black/60 rounded-2xl px-6 py-3 backdrop-blur-sm">
           <span class="text-white text-2xl font-bold tracking-wide">{{ seekIndicator }}</span>
         </div>
@@ -288,10 +316,8 @@ function stopProgressTracking() {
     </Transition>
 
     <!-- Right action bar -->
-    <div
-      class="absolute right-3 bottom-28 flex flex-col gap-5 items-center z-10"
-      @click.stop
-    >
+    <div class="absolute right-3 bottom-28 flex flex-col gap-5 items-center z-10" @click.stop>
+
       <!-- Mute -->
       <button class="flex flex-col items-center gap-1" @click="toggleMute">
         <div class="bg-black/30 rounded-full p-2.5 backdrop-blur-sm">
@@ -306,21 +332,14 @@ function stopProgressTracking() {
       </button>
 
       <!-- Favorite -->
-      <button
-        class="flex flex-col items-center gap-1 transition-transform active:scale-90"
-        @click.stop="emit('toggle-favorite', video.id)"
-      >
-        <div
-          class="rounded-full p-2.5 backdrop-blur-sm transition-colors"
-          :class="isFavorited ? 'bg-red-500/80' : 'bg-black/30'"
-        >
-          <svg
-            class="w-6 h-6"
-            :fill="isFavorited ? 'currentColor' : 'none'"
-            stroke="currentColor"
-            stroke-width="2"
-            viewBox="0 0 24 24"
-          >
+      <button class="flex flex-col items-center gap-1 transition-transform active:scale-90"
+              @click.stop="emit('toggle-favorite', video.id)">
+        <div class="rounded-full p-2.5 backdrop-blur-sm transition-colors"
+             :class="isFavorited ? 'bg-red-500/80' : 'bg-black/30'">
+          <!-- fix 6: always text-white so stroke is white when unfavorited -->
+          <svg class="w-6 h-6 text-white transition-colors"
+               :fill="isFavorited ? 'currentColor' : 'none'"
+               stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round"
               d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0
                  00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
@@ -328,6 +347,17 @@ function stopProgressTracking() {
         </div>
         <span class="text-white text-xs drop-shadow">{{ isFavorited ? '已收藏' : '收藏' }}</span>
       </button>
+
+      <!-- fix 2: cache / preload status -->
+      <div v-if="status === 'active'" class="flex flex-col items-center gap-0.5">
+        <div class="bg-black/30 rounded-xl px-2.5 py-1.5 backdrop-blur-sm text-center">
+          <div class="flex items-center gap-1 justify-center">
+            <div class="w-1.5 h-1.5 rounded-full" :class="nextVideoReady ? 'bg-green-400' : 'bg-white/30'"/>
+            <span class="text-white/60 text-xs">{{ nextVideoReady ? '就绪' : '缓冲' }}</span>
+          </div>
+          <span class="text-white/30 mt-0.5 block" style="font-size:10px">转码 {{ cachedCount }}</span>
+        </div>
+      </div>
 
       <!-- Fullscreen -->
       <button class="flex flex-col items-center gap-1" @click="toggleFullscreen">
@@ -343,6 +373,7 @@ function stopProgressTracking() {
         </div>
         <span class="text-white text-xs drop-shadow">{{ isFullscreen ? '退出' : '全屏' }}</span>
       </button>
+
     </div>
 
     <!-- Video info -->
@@ -363,7 +394,7 @@ function stopProgressTracking() {
       </span>
     </div>
 
-    <!-- Progress bar — h-5 touch area, h-1.5 visible track -->
+    <!-- Progress bar — h-5 touch area -->
     <div
       class="absolute bottom-0 left-0 right-0 h-5 cursor-pointer z-10"
       @click.stop="onProgressClick"
@@ -371,17 +402,20 @@ function stopProgressTracking() {
       @touchmove.stop.prevent="onProgressTouchMove"
       @touchend.stop
     >
+      <!-- Track -->
       <div class="absolute bottom-0 left-0 right-0 h-1.5 bg-white/20">
-        <div
-          class="h-full bg-white/80 transition-none"
-          :style="{ width: progressPercent + '%' }"
-        />
-        <div
-          class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg"
-          :style="{ left: `calc(${progressPercent}% - 8px)` }"
-        />
+        <!-- fix 1: buffered (gray) -->
+        <div class="absolute inset-y-0 left-0 bg-white/30 transition-none"
+             :style="{ width: Math.min(bufferedPercent, 100) + '%' }"/>
+        <!-- Played (white) -->
+        <div class="absolute inset-y-0 left-0 bg-white/80 transition-none"
+             :style="{ width: progressPercent + '%' }"/>
+        <!-- Thumb -->
+        <div class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg"
+             :style="{ left: `calc(${progressPercent}% - 8px)` }"/>
       </div>
     </div>
+
   </div>
 </template>
 
