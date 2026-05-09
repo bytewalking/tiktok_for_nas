@@ -29,12 +29,21 @@ function getStatus(index: number): PlayStatus {
   return 'idle'
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 async function loadVideos() {
   try {
     loading.value = true
     error.value = ''
     const [vids, ids] = await Promise.all([fetchVideos(), fetchFavoriteIds()])
-    videos.value = vids
+    videos.value = shuffle(vids)
     favoriteIds.value = new Set(ids)
   } catch {
     error.value = '加载失败，请检查后端服务是否运行'

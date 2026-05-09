@@ -19,6 +19,7 @@ async function removeFavorite(video: Video) {
   videos.value = videos.value.filter(v => v.id !== video.id)
 }
 
+defineExpose({ reload: load })
 onMounted(load)
 </script>
 

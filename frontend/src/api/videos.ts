@@ -98,6 +98,33 @@ export async function saveAndScan(settings: SmbSettings): Promise<void> {
   if (!res.ok) throw new Error('Failed to save settings')
 }
 
+export interface DayStat {
+  date: string
+  seconds: number
+  count: number
+}
+
+export interface WatchSummary {
+  totalSeconds: number
+  totalCount: number
+  byDay: DayStat[]
+}
+
+export async function fetchWatchSummary(): Promise<WatchSummary> {
+  const res = await fetch(`${BASE}/api/stats/watch-summary`)
+  if (!res.ok) throw new Error('Failed to fetch stats')
+  return res.json()
+}
+
+export function formatWatchTime(seconds: number): string {
+  if (seconds === 0) return '0 分钟'
+  if (seconds < 60) return `${seconds} 秒`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return m > 0 ? `${h} 小时 ${m} 分钟` : `${h} 小时`
+}
+
 export function formatDuration(seconds: number | null): string {
   if (!seconds) return '0:00'
   const h = Math.floor(seconds / 3600)
