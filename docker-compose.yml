@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  backend:
+    image: tiktoknas-backend:latest
+    container_name: tiktoknas-backend
+    ports:
+      - "8080:8080"
+    volumes:
+      # 绿联云视频目录（主机路径:容器路径）
+      - /volume4/Media/Private/Movie:/videos:ro
+      # 数据库、封面、HLS 缓存 — 持久化存储
+      - tiktoknas_data:/data
+    environment:
+      - APP_VIDEO_DIR=/videos
+      - APP_COVER_DIR=/data/covers
+      - APP_HLS_DIR=/data/hls
+      - SPRING_DATASOURCE_URL=jdbc:sqlite:/data/tiktoknas.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/videos"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    image: tiktoknas-frontend:latest
+    container_name: tiktoknas-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  tiktoknas_data:
+
+# ──────────────────────────────────────────────────────────────
+# 部署说明：
+#
+# 1. 将 backend/videos 路径改为你的 NAS 视频实际目录
+#    绿联云:   /volume4/Media/Private/Movie（当前配置）
+#    Synology: /volume1/video
+#    QNAP:     /share/CACHEDEV1_DATA/Video
+#
+# 2. 加载镜像：
+#    docker load -i tiktoknas-backend.tar
+#    docker load -i tiktoknas-frontend.tar
+#
+# 3. 启动：
+#    docker compose up -d
+#
+# 4. 访问：http://<NAS_IP>:3000
+# ──────────────────────────────────────────────────────────────

@@ -1,0 +1,35 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:sqlite:./tiktoknas.db}
+    driver-class-name: org.sqlite.JDBC
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.community.dialect.SQLiteDialect
+        format_sql: false
+    show-sql: false
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+app:
+  video-dir: ${APP_VIDEO_DIR:/videos}
+  cover-dir: ${APP_COVER_DIR:./data/covers}
+  hls-dir: ${APP_HLS_DIR:./data/hls}
+  # 原生 SMB 配置（留空则使用本地目录/OS挂载）
+  smb:
+    enabled: ${SMB_ENABLED:false}
+    host: ${SMB_HOST:}          # 例: 192.168.1.100
+    share: ${SMB_SHARE:videos}  # 共享名
+    domain: ${SMB_DOMAIN:}
+    username: ${SMB_USERNAME:}
+    password: ${SMB_PASSWORD:}
+    path: ${SMB_PATH:}          # 共享内子目录，留空则读根目录
+
+logging:
+  level:
+    com.tiktoknas: INFO
